@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 
 interface ResizedImage {
   id: string;
@@ -25,6 +25,8 @@ const FILE_SIZE_OPTIONS = [
   { value: 1 / Math.sqrt(8), label: "1/8", ratio: "1-8" },
 ];
 
+type ConvertMode = "preset" | "custom";
+
 export default function Home() {
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [originalInfo, setOriginalInfo] = useState<{
@@ -44,11 +46,26 @@ export default function Home() {
   ]);
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
 
+  // カスタムサイズ用の状態
+  const [convertMode, setConvertMode] = useState<ConvertMode>("preset");
+  const [customWidth, setCustomWidth] = useState<number>(0);
+  const [customHeight, setCustomHeight] = useState<number>(0);
+  const [keepAspectRatio, setKeepAspectRatio] = useState<boolean>(true);
+  const [lastChangedDimension, setLastChangedDimension] = useState<"width" | "height">("width");
+
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + " B";
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / (1024 * 1024)).toFixed(2) + " MB";
   };
+
+  // 画像が読み込まれたらカスタムサイズを初期化
+  useEffect(() => {
+    if (originalInfo) {
+      setCustomWidth(originalInfo.width);
+      setCustomHeight(originalInfo.height);
+    }
+  }, [originalInfo]);
 
   const resizeImage = useCallback(
     (
@@ -78,6 +95,37 @@ export default function Home() {
         const fileSize = Math.round((base64.length * 3) / 4);
 
         resolve({ dataUrl, width: newWidth, height: newHeight, fileSize });
+      });
+    },
+    []
+  );
+
+  const resizeImageToSize = useCallback(
+    (
+      img: HTMLImageElement,
+      targetWidth: number,
+      targetHeight: number,
+      originalType: string
+    ): Promise<{ dataUrl: string; width: number; height: number; fileSize: number }> => {
+      return new Promise((resolve) => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d")!;
+
+        canvas.width = targetWidth;
+        canvas.height = targetHeight;
+
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+
+        const mimeType = originalType === "image/png" ? "image/png" : "image/jpeg";
+        const quality = mimeType === "image/jpeg" ? 0.92 : undefined;
+        const dataUrl = canvas.toDataURL(mimeType, quality);
+
+        const base64 = dataUrl.split(",")[1];
+        const fileSize = Math.round((base64.length * 3) / 4);
+
+        resolve({ dataUrl, width: targetWidth, height: targetHeight, fileSize });
       });
     },
     []
@@ -123,6 +171,38 @@ export default function Home() {
     );
   };
 
+  const handleCustomWidthChange = (value: number) => {
+    setCustomWidth(value);
+    setLastChangedDimension("width");
+    if (keepAspectRatio && originalInfo && value > 0) {
+      const aspectRatio = originalInfo.height / originalInfo.width;
+      setCustomHeight(Math.round(value * aspectRatio));
+    }
+  };
+
+  const handleCustomHeightChange = (value: number) => {
+    setCustomHeight(value);
+    setLastChangedDimension("height");
+    if (keepAspectRatio && originalInfo && value > 0) {
+      const aspectRatio = originalInfo.width / originalInfo.height;
+      setCustomWidth(Math.round(value * aspectRatio));
+    }
+  };
+
+  const handleKeepAspectRatioChange = (checked: boolean) => {
+    setKeepAspectRatio(checked);
+    if (checked && originalInfo) {
+      // アスペクト比を維持するように調整
+      if (lastChangedDimension === "width" && customWidth > 0) {
+        const aspectRatio = originalInfo.height / originalInfo.width;
+        setCustomHeight(Math.round(customWidth * aspectRatio));
+      } else if (customHeight > 0) {
+        const aspectRatio = originalInfo.width / originalInfo.height;
+        setCustomWidth(Math.round(customHeight * aspectRatio));
+      }
+    }
+  };
+
   const handleConvert = async () => {
     if (!loadedImage || !originalInfo || selectedFileSizeScales.length === 0) return;
 
@@ -136,7 +216,6 @@ export default function Home() {
       const fileSizeOption = FILE_SIZE_OPTIONS.find((o) => o.value === fileSizeScale);
       if (!fileSizeOption) continue;
 
-      // 横幅縮小とファイルサイズ縮小を組み合わせる
       const combinedScale = selectedWidthScale * fileSizeScale;
 
       const result = await resizeImage(loadedImage, combinedScale, originalInfo.type);
@@ -148,6 +227,23 @@ export default function Home() {
     }
 
     setResizedImages(results);
+    setIsProcessing(false);
+  };
+
+  const handleCustomConvert = async () => {
+    if (!loadedImage || !originalInfo || customWidth <= 0 || customHeight <= 0) return;
+
+    setIsProcessing(true);
+    setResizedImages([]);
+
+    const result = await resizeImageToSize(loadedImage, customWidth, customHeight, originalInfo.type);
+
+    setResizedImages([{
+      id: `${customWidth}x${customHeight}`,
+      label: `カスタムサイズ`,
+      ...result,
+    }]);
+
     setIsProcessing(false);
   };
 
@@ -170,7 +266,6 @@ export default function Home() {
     });
   };
 
-  // 選択中の縮小後のサイズを計算
   const getScaledDimensions = (widthScale: number, fileSizeScale: number) => {
     if (!originalInfo) return { width: 0, height: 0 };
     const combinedScale = widthScale * fileSizeScale;
@@ -188,7 +283,7 @@ export default function Home() {
             画像ファイルサイズダウン
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
-            横幅の縮小比率とファイルサイズを選択して画像を縮小します
+            プリセットまたはカスタムサイズで画像を縮小します
           </p>
         </header>
 
@@ -259,69 +354,173 @@ export default function Home() {
               </div>
             </div>
 
+            {/* モード切り替えタブ */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
-                1. 横幅の縮小比率を選択
-              </h2>
-              <div className="flex flex-wrap gap-3 mb-2">
-                {WIDTH_SCALE_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    onClick={() => setSelectedWidthScale(option.value)}
-                    className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                      selectedWidthScale === option.value
-                        ? "border-blue-500 bg-blue-500 text-white"
-                        : "border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-300"
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
+              <div className="flex gap-2 mb-6">
+                <button
+                  onClick={() => setConvertMode("preset")}
+                  className={`flex-1 py-3 px-4 rounded-lg font-medium transition-colors ${
+                    convertMode === "preset"
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                >
+                  プリセットで変換
+                </button>
+                <button
+                  onClick={() => setConvertMode("custom")}
+                  className={`flex-1 py-3 px-4 rounded-lg font-medium transition-colors ${
+                    convertMode === "custom"
+                      ? "bg-blue-500 text-white"
+                      : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
+                  }`}
+                >
+                  カスタムサイズで変換
+                </button>
               </div>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                横幅 {selectedWidthScale * 100}% → {Math.round(originalInfo.width * selectedWidthScale)} × {Math.round(originalInfo.height * selectedWidthScale)} px
-              </p>
-            </div>
 
-            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
-              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
-                2. ファイルサイズを選択（複数選択可）
-              </h2>
-              <div className="flex flex-wrap gap-4 mb-6">
-                {FILE_SIZE_OPTIONS.map((option) => {
-                  const dims = getScaledDimensions(selectedWidthScale, option.value);
-                  return (
-                    <label
-                      key={option.ratio}
-                      className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                        selectedFileSizeScales.includes(option.value)
-                          ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
-                          : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
-                      }`}
-                    >
+              {convertMode === "preset" ? (
+                <>
+                  {/* プリセットモード */}
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                      1. 横幅の縮小比率を選択
+                    </h3>
+                    <div className="flex flex-wrap gap-3 mb-2">
+                      {WIDTH_SCALE_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          onClick={() => setSelectedWidthScale(option.value)}
+                          className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                            selectedWidthScale === option.value
+                              ? "border-blue-500 bg-blue-500 text-white"
+                              : "border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-300"
+                          }`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      横幅 {selectedWidthScale * 100}% → {Math.round(originalInfo.width * selectedWidthScale)} × {Math.round(originalInfo.height * selectedWidthScale)} px
+                    </p>
+                  </div>
+
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                      2. ファイルサイズを選択（複数選択可）
+                    </h3>
+                    <div className="flex flex-wrap gap-4">
+                      {FILE_SIZE_OPTIONS.map((option) => {
+                        const dims = getScaledDimensions(selectedWidthScale, option.value);
+                        return (
+                          <label
+                            key={option.ratio}
+                            className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                              selectedFileSizeScales.includes(option.value)
+                                ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
+                                : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selectedFileSizeScales.includes(option.value)}
+                              onChange={() => handleFileSizeToggle(option.value)}
+                              className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500"
+                            />
+                            <span className="font-medium text-gray-800 dark:text-white">
+                              {option.label}
+                            </span>
+                            <span className="text-sm text-gray-500 dark:text-gray-400">
+                              ({dims.width} × {dims.height} px)
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleConvert}
+                    disabled={selectedFileSizeScales.length === 0 || isProcessing}
+                    className="w-full md:w-auto bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-8 rounded-lg transition-colors"
+                  >
+                    {isProcessing ? "処理中..." : "変換する"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  {/* カスタムサイズモード */}
+                  <div className="mb-6">
+                    <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">
+                      サイズを入力
+                    </h3>
+
+                    <div className="flex flex-wrap items-center gap-4 mb-4">
+                      <div className="flex items-center gap-2">
+                        <label className="text-gray-600 dark:text-gray-300 font-medium">
+                          横幅:
+                        </label>
+                        <input
+                          type="number"
+                          value={customWidth}
+                          onChange={(e) => handleCustomWidthChange(parseInt(e.target.value) || 0)}
+                          min="1"
+                          max="10000"
+                          className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <span className="text-gray-500 dark:text-gray-400">px</span>
+                      </div>
+
+                      <span className="text-gray-400 dark:text-gray-500 text-xl">×</span>
+
+                      <div className="flex items-center gap-2">
+                        <label className="text-gray-600 dark:text-gray-300 font-medium">
+                          高さ:
+                        </label>
+                        <input
+                          type="number"
+                          value={customHeight}
+                          onChange={(e) => handleCustomHeightChange(parseInt(e.target.value) || 0)}
+                          min="1"
+                          max="10000"
+                          className="w-28 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        />
+                        <span className="text-gray-500 dark:text-gray-400">px</span>
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
-                        checked={selectedFileSizeScales.includes(option.value)}
-                        onChange={() => handleFileSizeToggle(option.value)}
+                        checked={keepAspectRatio}
+                        onChange={(e) => handleKeepAspectRatioChange(e.target.checked)}
                         className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500"
                       />
-                      <span className="font-medium text-gray-800 dark:text-white">
-                        {option.label}
-                      </span>
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
-                        ({dims.width} × {dims.height} px)
+                      <span className="text-gray-700 dark:text-gray-300">
+                        アスペクト比を維持
                       </span>
                     </label>
-                  );
-                })}
-              </div>
-              <button
-                onClick={handleConvert}
-                disabled={selectedFileSizeScales.length === 0 || isProcessing}
-                className="w-full md:w-auto bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-8 rounded-lg transition-colors"
-              >
-                {isProcessing ? "処理中..." : "変換する"}
-              </button>
+
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                      元のサイズ: {originalInfo.width} × {originalInfo.height} px
+                      {customWidth > 0 && customHeight > 0 && (
+                        <span className="ml-2">
+                          → 縮小率: {Math.round((customWidth / originalInfo.width) * 100)}% × {Math.round((customHeight / originalInfo.height) * 100)}%
+                        </span>
+                      )}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={handleCustomConvert}
+                    disabled={customWidth <= 0 || customHeight <= 0 || isProcessing}
+                    className="w-full md:w-auto bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-8 rounded-lg transition-colors"
+                  >
+                    {isProcessing ? "処理中..." : "変換する"}
+                  </button>
+                </>
+              )}
             </div>
           </>
         )}
@@ -339,15 +538,17 @@ export default function Home() {
               <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
                 リサイズ後の画像
               </h2>
-              <button
-                onClick={handleDownloadAll}
-                className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-              >
-                すべてダウンロード
-              </button>
+              {resizedImages.length > 1 && (
+                <button
+                  onClick={handleDownloadAll}
+                  className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                >
+                  すべてダウンロード
+                </button>
+              )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className={`grid gap-6 ${resizedImages.length === 1 ? 'grid-cols-1 max-w-md mx-auto' : 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3'}`}>
               {resizedImages.map((img) => (
                 <div
                   key={img.id}
