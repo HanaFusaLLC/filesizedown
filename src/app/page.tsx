@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 
 interface ResizedImage {
-  ratio: string;
+  id: string;
   label: string;
   dataUrl: string;
   width: number;
@@ -11,11 +11,18 @@ interface ResizedImage {
   fileSize: number;
 }
 
-const SCALE_OPTIONS = [
-  { value: 0.9, label: "90%", ratio: "90" },
-  { value: 0.8, label: "80%", ratio: "80" },
-  { value: 0.7, label: "70%", ratio: "70" },
-  { value: 0.5, label: "50%", ratio: "50" },
+const WIDTH_SCALE_OPTIONS = [
+  { value: 1.0, label: "100%" },
+  { value: 0.9, label: "90%" },
+  { value: 0.8, label: "80%" },
+  { value: 0.7, label: "70%" },
+  { value: 0.5, label: "50%" },
+];
+
+const FILE_SIZE_OPTIONS = [
+  { value: 1 / Math.sqrt(2), label: "1/2", ratio: "1-2" },
+  { value: 1 / 2, label: "1/4", ratio: "1-4" },
+  { value: 1 / Math.sqrt(8), label: "1/8", ratio: "1-8" },
 ];
 
 export default function Home() {
@@ -29,7 +36,12 @@ export default function Home() {
   } | null>(null);
   const [resizedImages, setResizedImages] = useState<ResizedImage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedScales, setSelectedScales] = useState<number[]>([0.9, 0.8, 0.7, 0.5]);
+  const [selectedWidthScale, setSelectedWidthScale] = useState<number>(1.0);
+  const [selectedFileSizeScales, setSelectedFileSizeScales] = useState<number[]>([
+    1 / Math.sqrt(2),
+    1 / 2,
+    1 / Math.sqrt(8),
+  ]);
   const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
 
   const formatFileSize = (bytes: number): string => {
@@ -103,8 +115,8 @@ export default function Home() {
     reader.readAsDataURL(file);
   };
 
-  const handleScaleToggle = (scale: number) => {
-    setSelectedScales((prev) =>
+  const handleFileSizeToggle = (scale: number) => {
+    setSelectedFileSizeScales((prev) =>
       prev.includes(scale)
         ? prev.filter((s) => s !== scale)
         : [...prev, scale].sort((a, b) => b - a)
@@ -112,21 +124,25 @@ export default function Home() {
   };
 
   const handleConvert = async () => {
-    if (!loadedImage || !originalInfo || selectedScales.length === 0) return;
+    if (!loadedImage || !originalInfo || selectedFileSizeScales.length === 0) return;
 
     setIsProcessing(true);
     setResizedImages([]);
 
     const results: ResizedImage[] = [];
+    const widthOption = WIDTH_SCALE_OPTIONS.find((o) => o.value === selectedWidthScale);
 
-    for (const scale of selectedScales.sort((a, b) => b - a)) {
-      const option = SCALE_OPTIONS.find((o) => o.value === scale);
-      if (!option) continue;
+    for (const fileSizeScale of selectedFileSizeScales.sort((a, b) => b - a)) {
+      const fileSizeOption = FILE_SIZE_OPTIONS.find((o) => o.value === fileSizeScale);
+      if (!fileSizeOption) continue;
 
-      const result = await resizeImage(loadedImage, scale, originalInfo.type);
+      // 横幅縮小とファイルサイズ縮小を組み合わせる
+      const combinedScale = selectedWidthScale * fileSizeScale;
+
+      const result = await resizeImage(loadedImage, combinedScale, originalInfo.type);
       results.push({
-        ratio: option.ratio,
-        label: option.label,
+        id: `${widthOption?.label}-${fileSizeOption.ratio}`,
+        label: `横${widthOption?.label} × ファイル${fileSizeOption.label}`,
         ...result,
       });
     }
@@ -135,12 +151,12 @@ export default function Home() {
     setIsProcessing(false);
   };
 
-  const handleDownload = (dataUrl: string, ratio: string) => {
+  const handleDownload = (dataUrl: string, id: string) => {
     if (!originalInfo) return;
 
     const extension = originalInfo.type === "image/png" ? "png" : "jpg";
     const baseName = originalInfo.name.replace(/\.[^/.]+$/, "");
-    const fileName = `${baseName}_${ratio}percent.${extension}`;
+    const fileName = `${baseName}_${id}.${extension}`;
 
     const link = document.createElement("a");
     link.href = dataUrl;
@@ -150,8 +166,18 @@ export default function Home() {
 
   const handleDownloadAll = () => {
     resizedImages.forEach((img) => {
-      handleDownload(img.dataUrl, img.ratio);
+      handleDownload(img.dataUrl, img.id);
     });
+  };
+
+  // 選択中の縮小後のサイズを計算
+  const getScaledDimensions = (widthScale: number, fileSizeScale: number) => {
+    if (!originalInfo) return { width: 0, height: 0 };
+    const combinedScale = widthScale * fileSizeScale;
+    return {
+      width: Math.round(originalInfo.width * combinedScale),
+      height: Math.round(originalInfo.height * combinedScale),
+    };
   };
 
   return (
@@ -162,7 +188,7 @@ export default function Home() {
             画像ファイルサイズダウン
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
-            画像の横幅を指定した比率に縮小します
+            横幅の縮小比率とファイルサイズを選択して画像を縮小します
           </p>
         </header>
 
@@ -235,36 +261,63 @@ export default function Home() {
 
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
               <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
-                縮小比率を選択
+                1. 横幅の縮小比率を選択
               </h2>
-              <div className="flex flex-wrap gap-4 mb-6">
-                {SCALE_OPTIONS.map((option) => (
-                  <label
+              <div className="flex flex-wrap gap-3 mb-2">
+                {WIDTH_SCALE_OPTIONS.map((option) => (
+                  <button
                     key={option.value}
-                    className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 cursor-pointer transition-colors ${
-                      selectedScales.includes(option.value)
-                        ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
-                        : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
+                    onClick={() => setSelectedWidthScale(option.value)}
+                    className={`px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                      selectedWidthScale === option.value
+                        ? "border-blue-500 bg-blue-500 text-white"
+                        : "border-gray-200 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:border-blue-300"
                     }`}
                   >
-                    <input
-                      type="checkbox"
-                      checked={selectedScales.includes(option.value)}
-                      onChange={() => handleScaleToggle(option.value)}
-                      className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500"
-                    />
-                    <span className="font-medium text-gray-800 dark:text-white">
-                      {option.label}
-                    </span>
-                    <span className="text-sm text-gray-500 dark:text-gray-400">
-                      ({Math.round(originalInfo.width * option.value)} × {Math.round(originalInfo.height * option.value)} px)
-                    </span>
-                  </label>
+                    {option.label}
+                  </button>
                 ))}
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                横幅 {selectedWidthScale * 100}% → {Math.round(originalInfo.width * selectedWidthScale)} × {Math.round(originalInfo.height * selectedWidthScale)} px
+              </p>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
+                2. ファイルサイズを選択（複数選択可）
+              </h2>
+              <div className="flex flex-wrap gap-4 mb-6">
+                {FILE_SIZE_OPTIONS.map((option) => {
+                  const dims = getScaledDimensions(selectedWidthScale, option.value);
+                  return (
+                    <label
+                      key={option.ratio}
+                      className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                        selectedFileSizeScales.includes(option.value)
+                          ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
+                          : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedFileSizeScales.includes(option.value)}
+                        onChange={() => handleFileSizeToggle(option.value)}
+                        className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500"
+                      />
+                      <span className="font-medium text-gray-800 dark:text-white">
+                        {option.label}
+                      </span>
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        ({dims.width} × {dims.height} px)
+                      </span>
+                    </label>
+                  );
+                })}
               </div>
               <button
                 onClick={handleConvert}
-                disabled={selectedScales.length === 0 || isProcessing}
+                disabled={selectedFileSizeScales.length === 0 || isProcessing}
                 className="w-full md:w-auto bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-8 rounded-lg transition-colors"
               >
                 {isProcessing ? "処理中..." : "変換する"}
@@ -294,10 +347,10 @@ export default function Home() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {resizedImages.map((img) => (
                 <div
-                  key={img.ratio}
+                  key={img.id}
                   className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
                 >
                   <div className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
@@ -319,7 +372,7 @@ export default function Home() {
                     </p>
                   </div>
                   <button
-                    onClick={() => handleDownload(img.dataUrl, img.ratio)}
+                    onClick={() => handleDownload(img.dataUrl, img.id)}
                     className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                   >
                     ダウンロード
