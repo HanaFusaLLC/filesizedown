@@ -11,6 +11,13 @@ interface ResizedImage {
   fileSize: number;
 }
 
+const SCALE_OPTIONS = [
+  { value: 0.9, label: "90%", ratio: "90" },
+  { value: 0.8, label: "80%", ratio: "80" },
+  { value: 0.7, label: "70%", ratio: "70" },
+  { value: 0.5, label: "50%", ratio: "50" },
+];
+
 export default function Home() {
   const [originalImage, setOriginalImage] = useState<string | null>(null);
   const [originalInfo, setOriginalInfo] = useState<{
@@ -22,6 +29,8 @@ export default function Home() {
   } | null>(null);
   const [resizedImages, setResizedImages] = useState<ResizedImage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [selectedScales, setSelectedScales] = useState<number[]>([0.9, 0.8, 0.7, 0.5]);
+  const [loadedImage, setLoadedImage] = useState<HTMLImageElement | null>(null);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes < 1024) return bytes + " B";
@@ -71,7 +80,6 @@ export default function Home() {
       return;
     }
 
-    setIsProcessing(true);
     setResizedImages([]);
 
     const reader = new FileReader();
@@ -80,7 +88,7 @@ export default function Home() {
       setOriginalImage(dataUrl);
 
       const img = new Image();
-      img.onload = async () => {
+      img.onload = () => {
         setOriginalInfo({
           name: file.name,
           width: img.width,
@@ -88,33 +96,43 @@ export default function Home() {
           fileSize: file.size,
           type: file.type,
         });
-
-        // ファイルサイズを1/2、1/4、1/8にするには
-        // ピクセル数（面積）を1/2、1/4、1/8にする
-        // つまり、各辺を1/√2、1/2、1/√8にする
-        const scales = [
-          { ratio: "1/2", scale: 1 / Math.sqrt(2), label: "1/2サイズ" },
-          { ratio: "1/4", scale: 1 / 2, label: "1/4サイズ" },
-          { ratio: "1/8", scale: 1 / Math.sqrt(8), label: "1/8サイズ" },
-        ];
-
-        const results: ResizedImage[] = [];
-
-        for (const { ratio, scale, label } of scales) {
-          const result = await resizeImage(img, scale, file.type);
-          results.push({
-            ratio,
-            label,
-            ...result,
-          });
-        }
-
-        setResizedImages(results);
-        setIsProcessing(false);
+        setLoadedImage(img);
       };
       img.src = dataUrl;
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleScaleToggle = (scale: number) => {
+    setSelectedScales((prev) =>
+      prev.includes(scale)
+        ? prev.filter((s) => s !== scale)
+        : [...prev, scale].sort((a, b) => b - a)
+    );
+  };
+
+  const handleConvert = async () => {
+    if (!loadedImage || !originalInfo || selectedScales.length === 0) return;
+
+    setIsProcessing(true);
+    setResizedImages([]);
+
+    const results: ResizedImage[] = [];
+
+    for (const scale of selectedScales.sort((a, b) => b - a)) {
+      const option = SCALE_OPTIONS.find((o) => o.value === scale);
+      if (!option) continue;
+
+      const result = await resizeImage(loadedImage, scale, originalInfo.type);
+      results.push({
+        ratio: option.ratio,
+        label: option.label,
+        ...result,
+      });
+    }
+
+    setResizedImages(results);
+    setIsProcessing(false);
   };
 
   const handleDownload = (dataUrl: string, ratio: string) => {
@@ -122,7 +140,7 @@ export default function Home() {
 
     const extension = originalInfo.type === "image/png" ? "png" : "jpg";
     const baseName = originalInfo.name.replace(/\.[^/.]+$/, "");
-    const fileName = `${baseName}_${ratio.replace("/", "-")}.${extension}`;
+    const fileName = `${baseName}_${ratio}percent.${extension}`;
 
     const link = document.createElement("a");
     link.href = dataUrl;
@@ -144,7 +162,7 @@ export default function Home() {
             画像ファイルサイズダウン
           </h1>
           <p className="text-gray-600 dark:text-gray-300">
-            画像のファイルサイズを1/2、1/4、1/8に減少させます
+            画像の横幅を指定した比率に縮小します
           </p>
         </header>
 
@@ -184,14 +202,7 @@ export default function Home() {
           </label>
         </div>
 
-        {isProcessing && (
-          <div className="text-center py-8">
-            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
-            <p className="mt-2 text-gray-600 dark:text-gray-300">処理中...</p>
-          </div>
-        )}
-
-        {originalInfo && originalImage && !isProcessing && (
+        {originalInfo && originalImage && (
           <>
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
               <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
@@ -222,56 +233,101 @@ export default function Home() {
               </div>
             </div>
 
-            {resizedImages.length > 0 && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
-                <div className="flex justify-between items-center mb-6">
-                  <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
-                    リサイズ後の画像
-                  </h2>
-                  <button
-                    onClick={handleDownloadAll}
-                    className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6 mb-8">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white mb-4">
+                縮小比率を選択
+              </h2>
+              <div className="flex flex-wrap gap-4 mb-6">
+                {SCALE_OPTIONS.map((option) => (
+                  <label
+                    key={option.value}
+                    className={`flex items-center gap-2 px-4 py-3 rounded-lg border-2 cursor-pointer transition-colors ${
+                      selectedScales.includes(option.value)
+                        ? "border-blue-500 bg-blue-50 dark:bg-blue-900/30"
+                        : "border-gray-200 dark:border-gray-600 hover:border-gray-300 dark:hover:border-gray-500"
+                    }`}
                   >
-                    すべてダウンロード
+                    <input
+                      type="checkbox"
+                      checked={selectedScales.includes(option.value)}
+                      onChange={() => handleScaleToggle(option.value)}
+                      className="w-5 h-5 text-blue-500 rounded focus:ring-blue-500"
+                    />
+                    <span className="font-medium text-gray-800 dark:text-white">
+                      {option.label}
+                    </span>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      ({Math.round(originalInfo.width * option.value)} × {Math.round(originalInfo.height * option.value)} px)
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <button
+                onClick={handleConvert}
+                disabled={selectedScales.length === 0 || isProcessing}
+                className="w-full md:w-auto bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-3 px-8 rounded-lg transition-colors"
+              >
+                {isProcessing ? "処理中..." : "変換する"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {isProcessing && (
+          <div className="text-center py-8">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-500 border-t-transparent"></div>
+            <p className="mt-2 text-gray-600 dark:text-gray-300">処理中...</p>
+          </div>
+        )}
+
+        {resizedImages.length > 0 && !isProcessing && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-lg p-6">
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-xl font-semibold text-gray-800 dark:text-white">
+                リサイズ後の画像
+              </h2>
+              <button
+                onClick={handleDownloadAll}
+                className="bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+              >
+                すべてダウンロード
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {resizedImages.map((img) => (
+                <div
+                  key={img.ratio}
+                  className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
+                >
+                  <div className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={img.dataUrl}
+                      alt={img.label}
+                      className="max-w-full max-h-full object-contain"
+                    />
+                  </div>
+                  <div className="text-center mb-4">
+                    <h3 className="font-semibold text-lg text-gray-800 dark:text-white">
+                      {img.label}
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {img.width} × {img.height} px
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      約 {formatFileSize(img.fileSize)}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDownload(img.dataUrl, img.ratio)}
+                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
+                  >
+                    ダウンロード
                   </button>
                 </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  {resizedImages.map((img) => (
-                    <div
-                      key={img.ratio}
-                      className="border border-gray-200 dark:border-gray-700 rounded-lg p-4"
-                    >
-                      <div className="aspect-video bg-gray-100 dark:bg-gray-700 rounded-lg mb-4 flex items-center justify-center overflow-hidden">
-                        <img
-                          src={img.dataUrl}
-                          alt={img.label}
-                          className="max-w-full max-h-full object-contain"
-                        />
-                      </div>
-                      <div className="text-center mb-4">
-                        <h3 className="font-semibold text-lg text-gray-800 dark:text-white">
-                          {img.label}
-                        </h3>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          {img.width} × {img.height} px
-                        </p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          約 {formatFileSize(img.fileSize)}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => handleDownload(img.dataUrl, img.ratio)}
-                        className="w-full bg-blue-500 hover:bg-blue-600 text-white font-medium py-2 px-4 rounded-lg transition-colors"
-                      >
-                        ダウンロード
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </>
+              ))}
+            </div>
+          </div>
         )}
       </div>
     </div>
